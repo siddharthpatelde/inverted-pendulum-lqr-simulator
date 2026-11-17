@@ -44,6 +44,9 @@ MARGIN_LEFT = 92
 MARGIN_RIGHT = 330
 MARGIN_TOP = 52
 MARGIN_BOTTOM = 108
+PLOT_HEIGHT = 142
+PLOT_TOP_GAP = 38
+LIVE_PARAMETERS_GAP = 42
 
 WHITE = (255, 255, 255)
 BLACK = (5, 8, 18)
@@ -127,17 +130,20 @@ class PlotHistory:
         self.samples = []
         self.max_samples = 520
         self.sample_clock = 0.0
+        self.time = 0.0
 
     def clear(self):
         self.samples.clear()
         self.sample_clock = 0.0
+        self.time = 0.0
 
     def append(self, dt, x, theta, force):
+        self.time += dt
         self.sample_clock += dt
         if self.sample_clock < PATH_SAMPLE_TIME:
             return
         self.sample_clock = 0.0
-        self.samples.append((x, math.degrees(theta), force))
+        self.samples.append((self.time, x, math.degrees(theta), force))
         if len(self.samples) > self.max_samples:
             self.samples.pop(0)
 
@@ -300,7 +306,7 @@ def draw_pendulum(surface, view, cart, target_x, history, small_font):
     pygame.draw.line(surface, RAIL, rail_start, rail_end, 4)
 
     if len(history.samples) > 1:
-        points = [(view.to_screen(sample[0], rail_y - 0.035)) for sample in history.samples]
+        points = [(view.to_screen(sample[1], rail_y - 0.035)) for sample in history.samples]
         pygame.draw.lines(surface, PATH, False, points, 3)
 
     target_base = view.to_screen(target_x, rail_y)
@@ -344,28 +350,56 @@ def draw_pendulum(surface, view, cart, target_x, history, small_font):
 
 
 def draw_plot(surface, view, history, small_font):
-    plot_rect = pygame.Rect(view.left, view.bottom + 38, view.width, 82)
+    plot_rect = pygame.Rect(view.left, view.bottom + PLOT_TOP_GAP, view.width, PLOT_HEIGHT)
+    inner = pygame.Rect(plot_rect.left + 70, plot_rect.top + 28, plot_rect.width - 140, plot_rect.height - 62)
     pygame.draw.rect(surface, PLOT_BG, plot_rect)
     pygame.draw.rect(surface, BLACK, plot_rect, 2)
-    mid_y = plot_rect.centery
-    pygame.draw.line(surface, GRID_MAJOR, (plot_rect.left + 4, mid_y), (plot_rect.right - 4, mid_y), 1)
-    draw_text(surface, small_font, "x", (plot_rect.left + 10, plot_rect.top + 8), BLUE)
-    draw_text(surface, small_font, "theta", (plot_rect.left + 42, plot_rect.top + 8), RED)
+    mid_y = inner.centery
+
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        y = inner.top + frac * inner.height
+        pygame.draw.line(surface, GRID_MINOR, (inner.left, y), (inner.right, y), 1)
+    pygame.draw.line(surface, GRID_MAJOR, (inner.left, mid_y), (inner.right, mid_y), 1)
+
+    draw_text(surface, small_font, "x (m)", (plot_rect.left + 10, plot_rect.top + 8), BLUE)
+    draw_text(surface, small_font, "theta (deg)", (plot_rect.left + 70, plot_rect.top + 8), RED)
+    draw_text(surface, small_font, "time (s)", (plot_rect.centerx - 26, plot_rect.bottom - 18), MUTED)
 
     if len(history.samples) < 2:
         return
 
-    max_x = max(max(abs(sample[0]) for sample in history.samples), 0.25)
-    max_theta = max(max(abs(sample[1]) for sample in history.samples), 5.0)
+    start_time = history.samples[0][0]
+    end_time = history.samples[-1][0]
+    time_span = max(end_time - start_time, PATH_SAMPLE_TIME)
+    max_x = max(max(abs(sample[1]) for sample in history.samples), 0.25)
+    max_theta = max(max(abs(sample[2]) for sample in history.samples), 5.0)
+
+    scale_lines = [
+        (inner.top, max_x, max_theta),
+        (mid_y, 0.0, 0.0),
+        (inner.bottom, -max_x, -max_theta),
+    ]
+    for y, x_label, theta_label in scale_lines:
+        draw_text(surface, small_font, f"{x_label: .2f}", (plot_rect.left + 10, int(y) - 8), BLUE)
+        draw_text(surface, small_font, f"{theta_label: .0f}", (inner.right + 12, int(y) - 8), RED)
+
+    tick_count = 4
+    for tick in range(tick_count + 1):
+        frac = tick / tick_count
+        x = inner.left + frac * inner.width
+        pygame.draw.line(surface, GRID_MINOR, (x, inner.top), (x, inner.bottom), 1)
+        seconds_from_now = -(time_span * (1.0 - frac))
+        draw_text(surface, small_font, f"{seconds_from_now: .0f}", (int(x) - 10, inner.bottom + 6), MUTED)
+
     series = (
-        (0, max_x, BLUE),
-        (1, max_theta, RED),
+        (1, max_x, BLUE),
+        (2, max_theta, RED),
     )
     for sample_index, scale, color in series:
         points = []
-        for index, sample in enumerate(history.samples):
-            x = plot_rect.left + 6 + index * (plot_rect.width - 12) / max(1, history.max_samples - 1)
-            y = mid_y - sample[sample_index] / scale * (plot_rect.height * 0.36)
+        for sample in history.samples:
+            x = inner.left + (sample[0] - start_time) / time_span * inner.width
+            y = mid_y - sample[sample_index] / scale * (inner.height * 0.46)
             points.append((x, y))
         pygame.draw.lines(surface, color, False, points, 2)
 
@@ -432,7 +466,7 @@ def draw_panel(surface, cart, target_x, sim_running, elapsed_time, status_messag
 
 def draw_live_parameters(surface, view, font, small_font, active_param, edit_text):
     param_rects = {}
-    y = view.bottom + 146
+    y = view.bottom + PLOT_TOP_GAP + PLOT_HEIGHT + LIVE_PARAMETERS_GAP
     draw_text(surface, font, "Live parameters", (view.left, y), PANEL_TEXT)
 
     y += 32
